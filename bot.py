@@ -28,10 +28,6 @@ BASE_DIR: Path = Path("/tmp/media_bot")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_FILE_SIZE: int = 49 * 1024 * 1024
-SUPPORTED_DOMAINS: list[str] = [
-    "instagram.com", "tiktok.com", "youtube.com", "youtu.be",
-    "facebook.com", "fb.watch", "twitter.com", "x.com", "threads.net",
-]
 
 # --------------------------------------------------------------------------- #
 # FFmpeg detection
@@ -61,36 +57,7 @@ def get_common_ydl_opts() -> dict:
         "extractor_retries": 10,
         "concurrent_fragment_downloads": 8,
         "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0.0.0 Safari/537.36"
-            ),
-        },
-    }
-
-def get_instagram_opts() -> dict:
-    """Специальные настройки для Instagram"""
-    return {
-        "extractor_args": {
-            "instagram": {
-                "no_watermark": True,
-            }
-        },
-        "format_sort": ["vcodec:h264"],
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "Cache-Control": "max-age=0",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         },
     }
 
@@ -109,11 +76,14 @@ def cleanup() -> None:
     except Exception:
         logger.warning("Cleanup failed")
 
-def is_supported(url: str) -> bool:
-    return any(domain in url.lower() for domain in SUPPORTED_DOMAINS)
-
 def is_instagram(url: str) -> bool:
     return "instagram.com" in url.lower()
+
+def is_tiktok(url: str) -> bool:
+    return "tiktok.com" in url.lower()
+
+def is_supported(url: str) -> bool:
+    return is_instagram(url) or is_tiktok(url)
 
 # --------------------------------------------------------------------------- #
 # Download functions
@@ -121,26 +91,14 @@ def is_instagram(url: str) -> bool:
 def download_video(url: str) -> Tuple[Path, dict]:
     outtmpl = generate_filepath()
     
-    if FFMPEG_PATH:
-        ydl_opts = {
-            **get_common_ydl_opts(),
-            "outtmpl": outtmpl,
-            "format": "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/best",
-            "merge_output_format": "mp4",
-            "ffmpeg_location": str(FFMPEG_PATH),
-            "cookiefile": get_cookie_file(),
-        }
-    else:
-        ydl_opts = {
-            **get_common_ydl_opts(),
-            "outtmpl": outtmpl,
-            "format": "best[ext=mp4]/best",
-            "cookiefile": get_cookie_file(),
-        }
-    
-    # Добавляем специальные настройки для Instagram
-    if is_instagram(url):
-        ydl_opts.update(get_instagram_opts())
+    ydl_opts = {
+        **get_common_ydl_opts(),
+        "outtmpl": outtmpl,
+        "format": "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/best",
+        "merge_output_format": "mp4",
+        "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
+        "cookiefile": get_cookie_file() if is_instagram(url) else None,
+    }
     
     logger.info(f"Downloading video: {url}")
     
@@ -186,7 +144,7 @@ def download_audio(url: str) -> Tuple[Path, dict]:
             "preferredquality": "192",
         }],
         "ffmpeg_location": str(FFMPEG_PATH),
-        "cookiefile": get_cookie_file(),
+        "cookiefile": get_cookie_file() if is_instagram(url) else None,
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -216,12 +174,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "🎥 *Скачаю что угодно, пока ты занят*\n\n"
         "Кидай ссылку — я сам разберусь.\n"
         "• Instagram\n"
-        "• TikTok\n"
-        "• YouTube Shorts\n"
-        "• Facebook, X, Threads\n\n"
+        "• TikTok\n\n"
         "🎬 Видео — в лучшем качестве со звуком\n"
         "🎵 Аудио — MP3 320kbps\n\n"
-        "📎 Нужны cookies? Просто скинь файл мне в лс\n"
+        "📎 Для Instagram отправь cookies.txt мне в лс\n"
         "Работаю 24/7. Даже когда ты спишь.",
         parse_mode="Markdown"
     )
@@ -229,7 +185,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     file = await update.message.document.get_file()
     await file.download_to_drive("cookies.txt")
-    await update.message.reply_text("✅ Cookies сохранены! Пробуй скачивать!")
+    await update.message.reply_text("✅ Cookies сохранены! Instagram будет работать!")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text
@@ -243,7 +199,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     url = urls[0]
     
     if not is_supported(url):
-        await update.message.reply_text("❌ Ссылка не поддерживается")
+        await update.message.reply_text("❌ Поддерживаются только Instagram и TikTok")
         return
     
     user_links[user_id] = url
@@ -282,11 +238,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
             
             with open(filepath, "rb") as f:
-                await query.message.reply_video(
-                    video=f,
-                    caption="✅ Готово!",
-                    supports_streaming=True
-                )
+                await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
         
         elif choice == "audio":
             if not FFMPEG_PATH:
@@ -304,25 +256,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
             
             with open(filepath, "rb") as f:
-                await query.message.reply_audio(
-                    audio=f,
-                    title=title,
-                    duration=duration,
-                    caption=f"🎵 {title}"
-                )
+                await query.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
         
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
     
     except ValueError as e:
         await query.edit_message_text(f"❌ {e}")
     except FileNotFoundError:
-        await query.edit_message_text("❌ Файл не найден после скачивания")
+        await query.edit_message_text("❌ Файл не найден")
     except yt_dlp.DownloadError as e:
         error_msg = str(e)
         logger.error(f"Download error: {error_msg}")
         
-        if "empty media" in error_msg.lower() or "login" in error_msg.lower() or "logged-in" in error_msg.lower():
-            await query.edit_message_text("❌ Instagram требует свежие cookies. Отправь мне новый файл cookies.txt")
+        if "login" in error_msg.lower() or "logged-in" in error_msg.lower() or "empty media" in error_msg.lower():
+            await query.edit_message_text("❌ Instagram требует авторизацию. Отправь мне cookies.txt")
         elif "video unavailable" in error_msg.lower() or "removed" in error_msg.lower():
             await query.edit_message_text("❌ Видео удалено или недоступно")
         elif "private" in error_msg.lower():
@@ -330,7 +277,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif "rate limit" in error_msg.lower() or "429" in error_msg:
             await query.edit_message_text("❌ Слишком много запросов. Подожди 10-15 минут")
         else:
-            await query.edit_message_text("❌ Не удалось скачать. Попробуй обновить cookies")
+            await query.edit_message_text("❌ Не удалось скачать")
     except Exception as e:
         logger.error(f"Unexpected error: {traceback.format_exc()}")
         await query.edit_message_text("❌ Сервер временно недоступен")
