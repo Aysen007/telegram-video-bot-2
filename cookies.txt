@@ -12,11 +12,6 @@
 .instagram.com	TRUE	/	TRUE	1815747607	sessionid	79973772008%3At2GqlzzziVuGio%3A9%3AAYi7FYFmAZS1l_XI-1Uozk2nZ-73ikyP0640EKrDRA
 .instagram.com	TRUE	/	TRUE	1785156491	wd	2518x1334
 .instagram.com	TRUE	/	TRUE	0	rur	RVA%2C17841480040246721%2C1785761295%3A01ff325b07a5443f78e41d5f8622a90e4ded0b5ce3f60c8c4fc535c4e8232430adc7c93c
-
-# Netscape HTTP Cookie File
-# https://curl.haxx.se/rfc/cookie_spec.html
-# This is a generated file! Do not edit.
-
 .youtube.com	TRUE	/	TRUE	1819112318	PREF	f6=40000000&tz=Asia.Yakutsk&f5=30000&f7=140&f4=10000
 .youtube.com	TRUE	/	TRUE	0	YSC	zDx4gugl_Wk
 .youtube.com	TRUE	/	TRUE	1815574532	LOGIN_INFO	AFmmF2swRQIgHUh53Fw8CBd4kk4HAYJWQzGZGrpbx9I-k9A_WHF7UikCIQD9bRsTrlBQ9ejNg74XHkeSmKh1JCIh_dhXo1yTfTq2qg:QUQ3MjNmeDh5THFNc18xc0RLcm9reG1zTXlwei1ndHBuV3o3MGNNRkZsbmpCVGxrUXE4Ql93TUw2bWVJVHZ6V0lBQkpiQ0FaNlFkT1dkbzF2Z3pZa1Z2aHZYYmtIQTY0VGhGWU5oNzNLVDh6cjI3dE5uZ2JBdkZkenVhckZ3Zk1kcHdCemVjcnNGbVdYYkYxdDQ0RlZheUt4bmF6dkItU0xR
