@@ -7,3 +7,6 @@ cmds = [
     "apt-get update",
     "apt-get install -y ffmpeg"
 ]
+
+[start]
+cmd = "python bot.py"

@@ -95,7 +95,6 @@ def download_video(url: str) -> Tuple[Path, dict]:
     }
     
     logger.info(f"Downloading video: {url}")
-    logger.info(f"Using format: {fmt}")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -153,8 +152,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "🎥 Отправь ссылку на видео\n\n"
         "🎬 Видео — видео со звуком\n"
-        "🎵 Аудио — MP3"
+        "🎵 Аудио — MP3\n\n"
+        "📎 Отправь cookies.txt для Instagram"
     )
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Принимает cookies.txt"""
+    file = await update.message.document.get_file()
+    await file.download_to_drive("cookies.txt")
+    await update.message.reply_text("✅ Cookies сохранены! Instagram будет работать!")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text
@@ -237,20 +243,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         error_msg = str(e)
         logger.error(f"Download error: {error_msg}")
         
-        if "video unavailable" in error_msg.lower() or "removed" in error_msg.lower():
+        if "empty media" in error_msg.lower() or "login" in error_msg.lower() or "logged-in" in error_msg.lower():
+            await query.edit_message_text("❌ Требуется авторизация Instagram. Отправь мне файл cookies.txt")
+        elif "video unavailable" in error_msg.lower() or "removed" in error_msg.lower():
             await query.edit_message_text("❌ Видео удалено или недоступно")
         elif "private" in error_msg.lower():
             await query.edit_message_text("❌ Приватное видео")
-        elif "login" in error_msg.lower() or "sign in" in error_msg.lower():
-            await query.edit_message_text("❌ Требуется авторизация. Отправь cookies.txt")
         elif "rate limit" in error_msg.lower() or "429" in error_msg:
             await query.edit_message_text("❌ Слишком много запросов. Подожди немного")
-        elif "geo" in error_msg.lower() or "region" in error_msg.lower():
-            await query.edit_message_text("❌ Видео недоступно в твоём регионе")
-        elif "ffmpeg" in error_msg.lower():
-            await query.edit_message_text("❌ Ошибка обработки видео")
         else:
-            await query.edit_message_text(f"❌ Не удалось скачать: {error_msg[:100]}")
+            await query.edit_message_text(f"❌ Не удалось скачать")
     except Exception as e:
         logger.error(f"Unexpected error: {traceback.format_exc()}")
         await query.edit_message_text("❌ Сервер временно недоступен")
@@ -264,6 +266,7 @@ if __name__ == "__main__":
     
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     
