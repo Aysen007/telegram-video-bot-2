@@ -69,6 +69,31 @@ def get_common_ydl_opts() -> dict:
         },
     }
 
+def get_instagram_opts() -> dict:
+    """Специальные настройки для Instagram"""
+    return {
+        "extractor_args": {
+            "instagram": {
+                "no_watermark": True,
+            }
+        },
+        "format_sort": ["vcodec:h264"],
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
+        },
+    }
+
 def get_cookie_file() -> Optional[str]:
     cookie_path = Path("cookies.txt")
     return str(cookie_path) if cookie_path.exists() else None
@@ -87,6 +112,9 @@ def cleanup() -> None:
 def is_supported(url: str) -> bool:
     return any(domain in url.lower() for domain in SUPPORTED_DOMAINS)
 
+def is_instagram(url: str) -> bool:
+    return "instagram.com" in url.lower()
+
 # --------------------------------------------------------------------------- #
 # Download functions
 # --------------------------------------------------------------------------- #
@@ -97,7 +125,7 @@ def download_video(url: str) -> Tuple[Path, dict]:
         ydl_opts = {
             **get_common_ydl_opts(),
             "outtmpl": outtmpl,
-            "format": "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/best",  # H.264 видео + AAC аудио
+            "format": "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/best",
             "merge_output_format": "mp4",
             "ffmpeg_location": str(FFMPEG_PATH),
             "cookiefile": get_cookie_file(),
@@ -109,6 +137,10 @@ def download_video(url: str) -> Tuple[Path, dict]:
             "format": "best[ext=mp4]/best",
             "cookiefile": get_cookie_file(),
         }
+    
+    # Добавляем специальные настройки для Instagram
+    if is_instagram(url):
+        ydl_opts.update(get_instagram_opts())
     
     logger.info(f"Downloading video: {url}")
     
@@ -126,7 +158,6 @@ def download_video(url: str) -> Tuple[Path, dict]:
     filepath = files[0]
     logger.info(f"Downloaded: {filepath} ({filepath.stat().st_size} bytes)")
     
-    # Если есть ffmpeg и файл не mp4 - конвертируем
     if FFMPEG_PATH and filepath.suffix != ".mp4":
         import subprocess
         new_path = filepath.with_suffix(".mp4")
@@ -182,16 +213,23 @@ user_links: dict[int, str] = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "🎥 Отправь ссылку на видео\n\n"
-        "🎬 Видео — видео со звуком\n"
-        "🎵 Аудио — MP3\n\n"
-        "📎 Отправь cookies.txt для Instagram"
+        "🎥 *Скачаю что угодно, пока ты занят*\n\n"
+        "Кидай ссылку — я сам разберусь.\n"
+        "• Instagram\n"
+        "• TikTok\n"
+        "• YouTube Shorts\n"
+        "• Facebook, X, Threads\n\n"
+        "🎬 Видео — в лучшем качестве со звуком\n"
+        "🎵 Аудио — MP3 320kbps\n\n"
+        "📎 Нужны cookies? Просто скинь файл мне в лс\n"
+        "Работаю 24/7. Даже когда ты спишь.",
+        parse_mode="Markdown"
     )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     file = await update.message.document.get_file()
     await file.download_to_drive("cookies.txt")
-    await update.message.reply_text("✅ Cookies сохранены! Instagram будет работать!")
+    await update.message.reply_text("✅ Cookies сохранены! Пробуй скачивать!")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text
@@ -284,15 +322,15 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         logger.error(f"Download error: {error_msg}")
         
         if "empty media" in error_msg.lower() or "login" in error_msg.lower() or "logged-in" in error_msg.lower():
-            await query.edit_message_text("❌ Требуется авторизация Instagram. Отправь мне файл cookies.txt")
+            await query.edit_message_text("❌ Instagram требует свежие cookies. Отправь мне новый файл cookies.txt")
         elif "video unavailable" in error_msg.lower() or "removed" in error_msg.lower():
             await query.edit_message_text("❌ Видео удалено или недоступно")
         elif "private" in error_msg.lower():
-            await query.edit_message_text("❌ Приватное видео")
+            await query.edit_message_text("❌ Приватный аккаунт")
         elif "rate limit" in error_msg.lower() or "429" in error_msg:
-            await query.edit_message_text("❌ Слишком много запросов. Подожди немного")
+            await query.edit_message_text("❌ Слишком много запросов. Подожди 10-15 минут")
         else:
-            await query.edit_message_text("❌ Не удалось скачать")
+            await query.edit_message_text("❌ Не удалось скачать. Попробуй обновить cookies")
     except Exception as e:
         logger.error(f"Unexpected error: {traceback.format_exc()}")
         await query.edit_message_text("❌ Сервер временно недоступен")
