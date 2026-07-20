@@ -24,7 +24,7 @@ logger = logging.getLogger("MediaBot")
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
-TOKEN: str = os.environ["8997095280:AAEgfJXENJCoM06wVG5LRVljVs5Y1YntC7w"]
+TOKEN: str = os.environ["TOKEN"]
 BASE_DIR: Path = Path("/tmp/media_bot")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
