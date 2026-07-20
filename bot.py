@@ -75,20 +75,6 @@ def cleanup() -> None:
 def is_supported(url: str) -> bool:
     return any(domain in url.lower() for domain in SUPPORTED_DOMAINS)
 
-async def send_video(update: Update, filepath: Path) -> None:
-    size = filepath.stat().st_size
-    if size > MAX_FILE_SIZE:
-        raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
-    with open(filepath, "rb") as f:
-        await update.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
-
-async def send_audio(update: Update, filepath: Path, title: str, duration: int) -> None:
-    size = filepath.stat().st_size
-    if size > MAX_FILE_SIZE:
-        raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
-    with open(filepath, "rb") as f:
-        await update.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
-
 def download_video(url: str) -> Tuple[Path, dict]:
     outtmpl = generate_filepath()
     
@@ -99,7 +85,6 @@ def download_video(url: str) -> Tuple[Path, dict]:
         fmt = "best[ext=mp4]/best"
         merge = None
     
-    # Специальные настройки для TikTok
     ydl_opts = {
         **get_common_ydl_opts(),
         "outtmpl": outtmpl,
@@ -107,13 +92,6 @@ def download_video(url: str) -> Tuple[Path, dict]:
         "merge_output_format": merge,
         "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
         "cookiefile": get_cookie_file(),
-        "extractor_args": {
-            "tiktok": {
-                "headers": {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                }
-            }
-        },
     }
     
     logger.info(f"Downloading video: {url}")
@@ -223,7 +201,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.edit_message_text("⏳ Скачиваю видео...")
             filepath, info = download_video(url)
             await query.edit_message_text("📤 Отправляю...")
-            await send_video(update, filepath)
+            
+            size = filepath.stat().st_size
+            if size > MAX_FILE_SIZE:
+                raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
+            
+            with open(filepath, "rb") as f:
+                await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
         
         elif choice == "audio":
             if not FFMPEG_PATH:
@@ -235,7 +219,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             title = info.get("title", "Audio")
             duration = int(info.get("duration", 0))
             await query.edit_message_text("📤 Отправляю...")
-            await send_audio(update, filepath, title, duration)
+            
+            size = filepath.stat().st_size
+            if size > MAX_FILE_SIZE:
+                raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
+            
+            with open(filepath, "rb") as f:
+                await query.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
         
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
     
