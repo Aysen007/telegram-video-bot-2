@@ -18,7 +18,11 @@ os.makedirs(AUDIO_FOLDER, exist_ok=True)
 user_links = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🎥 Привет! Отправь ссылку на видео из Instagram или TikTok")
+    await update.message.reply_text(
+        "🎥 Привет! Отправь ссылку на видео из Instagram или TikTok\n\n"
+        "🎬 Видео — скачивает видео со звуком\n"
+        "🎵 Аудио — извлекает звук в MP3"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
@@ -71,7 +75,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ydl_opts = {
                 'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
                 'quiet': True,
-                'format': 'best',
+                'format': 'mp4/best',  # Сразу mp4
                 'merge_output_format': 'mp4',
             }
             
@@ -103,18 +107,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ydl_opts = {
                 'outtmpl': os.path.join(AUDIO_FOLDER, '%(title)s.%(ext)s'),
                 'quiet': True,
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '320',
-                }],
+                'format': 'm4a/bestaudio',  # M4A не требует ffmpeg
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.extract_info(url, download=True)
                 
-                audio_files = [f for f in os.listdir(AUDIO_FOLDER) if f.endswith('.mp3')]
+                audio_files = os.listdir(AUDIO_FOLDER)
                 if not audio_files:
                     raise Exception("Аудио не найдено")
                 
@@ -126,10 +125,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await query.edit_message_text(f"❌ Слишком большой: {size/1024/1024:.1f} MB")
                     return
                 
-                await query.edit_message_text("📤 Отправляю...")
+                await query.edit_message_text("📤 Отправляю аудио...")
                 
                 with open(audio_path, 'rb') as f:
-                    await query.message.reply_audio(audio=f, title="Audio")
+                    await query.message.reply_audio(audio=f, title="Audio", performer="Downloaded")
                 
                 os.remove(audio_path)
         
