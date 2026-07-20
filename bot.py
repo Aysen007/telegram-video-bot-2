@@ -21,7 +21,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎥 Привет! Отправь ссылку на видео из Instagram или TikTok\n\n"
         "🎬 Видео — скачивает видео со звуком\n"
-        "🎵 Аудио — извлекает звук в MP3"
+        "🎵 Аудио — извлекает звук"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -43,7 +43,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [
         [InlineKeyboardButton("🎬 Скачать видео", callback_data="video")],
-        [InlineKeyboardButton("🎵 Скачать аудио MP3", callback_data="audio")]
+        [InlineKeyboardButton("🎵 Скачать аудио", callback_data="audio")]
     ]
     
     await update.message.reply_text("Выбери формат:", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -72,10 +72,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if choice == "video":
             await query.edit_message_text("⏳ Скачиваю видео...")
             
+            # Пробуем разные форматы
             ydl_opts = {
                 'outtmpl': os.path.join(DOWNLOAD_FOLDER, '%(title)s.%(ext)s'),
                 'quiet': True,
-                'format': 'mp4/best',  # Сразу mp4
+                'format': 'bestvideo+bestaudio/best',  # Автовыбор лучшего
                 'merge_output_format': 'mp4',
             }
             
@@ -96,8 +97,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 await query.edit_message_text("📤 Отправляю...")
                 
-                with open(video_path, 'rb') as f:
-                    await query.message.reply_video(video=f, caption="✅ Готово!")
+                # Определяем тип файла
+                if video_path.endswith('.mp4'):
+                    with open(video_path, 'rb') as f:
+                        await query.message.reply_video(video=f, caption="✅ Готово!")
+                else:
+                    with open(video_path, 'rb') as f:
+                        await query.message.reply_document(document=f, caption="✅ Готово!")
                 
                 os.remove(video_path)
                 
@@ -107,7 +113,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ydl_opts = {
                 'outtmpl': os.path.join(AUDIO_FOLDER, '%(title)s.%(ext)s'),
                 'quiet': True,
-                'format': 'm4a/bestaudio',  # M4A не требует ffmpeg
+                'format': 'bestaudio/best',  # Автовыбор аудио
             }
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -128,7 +134,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("📤 Отправляю аудио...")
                 
                 with open(audio_path, 'rb') as f:
-                    await query.message.reply_audio(audio=f, title="Audio", performer="Downloaded")
+                    await query.message.reply_audio(audio=f, title="Audio")
                 
                 os.remove(audio_path)
         
@@ -136,7 +142,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
         
     except Exception as e:
-        await query.edit_message_text(f"❌ Ошибка: {str(e)[:150]}")
+        error_msg = str(e)[:200]
+        logger.error(f"Error: {error_msg}")
+        await query.edit_message_text(f"❌ Ошибка: {error_msg}")
         if user_id in user_links:
             del user_links[user_id]
 
