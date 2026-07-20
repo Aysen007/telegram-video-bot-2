@@ -11,12 +11,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
 
+# --------------------------------------------------------------------------- #
+# Logging
+# --------------------------------------------------------------------------- #
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger("MediaBot")
 
+# --------------------------------------------------------------------------- #
+# Configuration
+# --------------------------------------------------------------------------- #
 TOKEN: str = os.environ["TOKEN"]
 BASE_DIR: Path = Path("/tmp/media_bot")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -27,6 +33,9 @@ SUPPORTED_DOMAINS: list[str] = [
     "facebook.com", "fb.watch", "twitter.com", "x.com", "threads.net",
 ]
 
+# --------------------------------------------------------------------------- #
+# FFmpeg detection
+# --------------------------------------------------------------------------- #
 def find_ffmpeg() -> Optional[Path]:
     path = shutil.which("ffmpeg")
     if path:
@@ -37,10 +46,13 @@ def find_ffmpeg() -> Optional[Path]:
 
 FFMPEG_PATH: Optional[Path] = find_ffmpeg()
 
+# --------------------------------------------------------------------------- #
+# Helpers
+# --------------------------------------------------------------------------- #
 def get_common_ydl_opts() -> dict:
     return {
-        "quiet": False,
-        "no_warnings": False,
+        "quiet": True,
+        "no_warnings": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
         "retries": 15,
@@ -75,24 +87,28 @@ def cleanup() -> None:
 def is_supported(url: str) -> bool:
     return any(domain in url.lower() for domain in SUPPORTED_DOMAINS)
 
+# --------------------------------------------------------------------------- #
+# Download functions
+# --------------------------------------------------------------------------- #
 def download_video(url: str) -> Tuple[Path, dict]:
     outtmpl = generate_filepath()
     
     if FFMPEG_PATH:
-        fmt = "bv*+ba/b"
-        merge = "mp4"
+        ydl_opts = {
+            **get_common_ydl_opts(),
+            "outtmpl": outtmpl,
+            "format": "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/best",  # H.264 видео + AAC аудио
+            "merge_output_format": "mp4",
+            "ffmpeg_location": str(FFMPEG_PATH),
+            "cookiefile": get_cookie_file(),
+        }
     else:
-        fmt = "best[ext=mp4]/best"
-        merge = None
-    
-    ydl_opts = {
-        **get_common_ydl_opts(),
-        "outtmpl": outtmpl,
-        "format": fmt,
-        "merge_output_format": merge,
-        "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
-        "cookiefile": get_cookie_file(),
-    }
+        ydl_opts = {
+            **get_common_ydl_opts(),
+            "outtmpl": outtmpl,
+            "format": "best[ext=mp4]/best",
+            "cookiefile": get_cookie_file(),
+        }
     
     logger.info(f"Downloading video: {url}")
     
@@ -107,8 +123,21 @@ def download_video(url: str) -> Tuple[Path, dict]:
     if not files:
         raise FileNotFoundError("Downloaded file not found")
     
-    logger.info(f"Downloaded: {files[0]} ({files[0].stat().st_size} bytes)")
-    return files[0], info
+    filepath = files[0]
+    logger.info(f"Downloaded: {filepath} ({filepath.stat().st_size} bytes)")
+    
+    # Если есть ffmpeg и файл не mp4 - конвертируем
+    if FFMPEG_PATH and filepath.suffix != ".mp4":
+        import subprocess
+        new_path = filepath.with_suffix(".mp4")
+        subprocess.run(
+            [str(FFMPEG_PATH), "-i", str(filepath), "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(new_path)],
+            check=True, capture_output=True
+        )
+        filepath.unlink()
+        filepath = new_path
+    
+    return filepath, info
 
 def download_audio(url: str) -> Tuple[Path, dict]:
     if not FFMPEG_PATH:
@@ -146,6 +175,9 @@ def download_audio(url: str) -> Tuple[Path, dict]:
     
     return files[0], info
 
+# --------------------------------------------------------------------------- #
+# Telegram handlers
+# --------------------------------------------------------------------------- #
 user_links: dict[int, str] = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -157,7 +189,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Принимает cookies.txt"""
     file = await update.message.document.get_file()
     await file.download_to_drive("cookies.txt")
     await update.message.reply_text("✅ Cookies сохранены! Instagram будет работать!")
@@ -213,7 +244,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
             
             with open(filepath, "rb") as f:
-                await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
+                await query.message.reply_video(
+                    video=f,
+                    caption="✅ Готово!",
+                    supports_streaming=True
+                )
         
         elif choice == "audio":
             if not FFMPEG_PATH:
@@ -231,7 +266,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
             
             with open(filepath, "rb") as f:
-                await query.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
+                await query.message.reply_audio(
+                    audio=f,
+                    title=title,
+                    duration=duration,
+                    caption=f"🎵 {title}"
+                )
         
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
     
@@ -252,17 +292,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif "rate limit" in error_msg.lower() or "429" in error_msg:
             await query.edit_message_text("❌ Слишком много запросов. Подожди немного")
         else:
-            await query.edit_message_text(f"❌ Не удалось скачать")
+            await query.edit_message_text("❌ Не удалось скачать")
     except Exception as e:
         logger.error(f"Unexpected error: {traceback.format_exc()}")
         await query.edit_message_text("❌ Сервер временно недоступен")
     finally:
         cleanup()
 
+# --------------------------------------------------------------------------- #
+# Entry point
+# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     logger.info("Starting bot...")
     logger.info(f"FFmpeg: {'found' if FFMPEG_PATH else 'NOT FOUND'}")
-    logger.info(f"Python: {os.sys.version}")
     
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
