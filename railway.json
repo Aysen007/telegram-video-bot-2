@@ -1,0 +1,9 @@
+// railway.json (optional but makes the service type explicit)
+{
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python bot.py"
+  }
+}
