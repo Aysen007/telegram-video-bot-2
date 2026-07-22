@@ -219,7 +219,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             # 👇 ВОТ СЮДА ВСТАВЛЯЕШЬ РЕКЛАМУ
             await query.message.reply_text(
                 "💡 Больше информации в нашем канале: https://t.me/zvucovideo"
-                "Там ты найдешь гайды по использыванию бота и много чего еще!"
+		 "💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
             )
         
         elif choice == "audio":
