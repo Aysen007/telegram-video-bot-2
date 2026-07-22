@@ -39,18 +39,9 @@ def get_common_ydl_opts() -> dict:
         "no_warnings": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
-        "retries": 20,
-        "fragment_retries": 20,
-        "socket_timeout": 60,
-        "extractor_retries": 15,
-        "concurrent_fragment_downloads": 16,
-        "buffersize": 1024,
-        "http_chunk_size": 10485760,
-        "http_headers": {
-            "User-Agent": "com.zhiliaoapp.musically/2022600040 (Linux; U; Android 13; en_US; Pixel 7; Build/TQ2A.230505.002; Cronet/113.0.5672.131)",
-            "Accept": "*/*",
-            "Accept-Encoding": "identity",
-        },
+        "retries": 10,
+        "fragment_retries": 10,
+        "socket_timeout": 30,
     }
 
 def get_cookie_file() -> Optional[str]:
@@ -92,22 +83,29 @@ def download_video(url: str) -> Tuple[Path, dict]:
         "merge_output_format": "mp4",
         "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
         "cookiefile": get_cookie_file() if is_instagram(url) else None,
-        # Для TikTok добавляем спецнастройки
-        "extractor_args": {
-            "tiktok": {
-                "api_hostname": "api16-normal-c-useast1a.tiktokv.com",
-                "app_name": "trill",
-                "app_version": "34.1.2",
-                "manifest_app_version": "34.1.2",
-            }
-        },
-        "format_sort": ["vcodec:h264", "res", "br"],
     }
+    
+    # Для TikTok пробуем разные User-Agent
+    if is_tiktok(url):
+        ydl_opts["http_headers"] = {
+            "User-Agent": "TikTok 26.2.0 rcx 262018 (iPhone; iOS 14.4.2; en_US) Cronet",
+        }
     
     logger.info(f"Downloading video: {url}")
     
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=True)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except Exception as e:
+        # Если с первым User-Agent не вышло, пробуем другой
+        if is_tiktok(url):
+            ydl_opts["http_headers"] = {
+                "User-Agent": "com.ss.android.ugc.trill/260202 (Linux; U; Android 10; en_US; Pixel 4 Build/QQ3A.200805.001)",
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+        else:
+            raise e
     
     files = sorted(
         BASE_DIR.glob(f"{Path(outtmpl).stem}*"),
@@ -141,6 +139,13 @@ def download_audio(url: str) -> Tuple[Path, dict]:
         "cookiefile": get_cookie_file() if is_instagram(url) else None,
     }
     
+    if is_tiktok(url):
+        ydl_opts["http_headers"] = {
+            "User-Agent": "TikTok 26.2.0 rcx 262018 (iPhone; iOS 14.4.2; en_US) Cronet",
+        }
+    
+    logger.info(f"Downloading audio: {url}")
+    
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
     
@@ -168,6 +173,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• TikTok\n\n"
         "🎬 Видео — в лучшем качестве со звуком\n"
         "🎵 Аудио — MP3 320kbps\n\n"
+        "📎 Для Instagram отправь cookies.txt мне в лс\n"
         "Работаю 24/7. Даже когда ты спишь.",
         parse_mode="Markdown"
     )
@@ -231,9 +237,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             with open(filepath, "rb") as f:
                 await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
             
-            # 👇 ВОТ СЮДА ВСТАВЛЯЕШЬ РЕКЛАМУ
             await query.message.reply_text(
-                "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
+               "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
 		"💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
             )
         
@@ -256,7 +261,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             with open(filepath, "rb") as f:
                 await query.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
             
-            # 👇 И СЮДА ТОЖЕ
             await query.message.reply_text(
                 "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
 		"💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
@@ -274,12 +278,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         if "login" in error_msg.lower() or "empty media" in error_msg.lower():
             await query.edit_message_text("❌ Instagram требует авторизацию. Отправь мне cookies.txt")
-        elif "video unavailable" in error_msg.lower():
-            await query.edit_message_text("❌ Видео удалено или недоступно")
+        elif "video unavailable" in error_msg.lower() or "status code" in error_msg.lower():
+            await query.edit_message_text("❌ Видео временно недоступно. Попробуй позже")
         elif "private" in error_msg.lower():
             await query.edit_message_text("❌ Приватный аккаунт")
         else:
-            await query.edit_message_text("❌ Не удалось скачать")
+            await query.edit_message_text("❌ Не удалось скачать. Попробуй другую ссылку")
     except Exception as e:
         logger.error(f"Unexpected error: {traceback.format_exc()}")
         await query.edit_message_text("❌ Сервер временно недоступен")
