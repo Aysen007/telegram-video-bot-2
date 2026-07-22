@@ -4,6 +4,8 @@ import shutil
 import uuid
 import logging
 import traceback
+import requests
+import json
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -68,44 +70,74 @@ def is_tiktok(url: str) -> bool:
 def is_supported(url: str) -> bool:
     return is_instagram(url) or is_tiktok(url)
 
-def download_video(url: str) -> Tuple[Path, dict]:
-    outtmpl = generate_filepath()
+def download_tiktok_video(url: str) -> Tuple[Path, dict]:
+    """Скачивание TikTok через API"""
+    # Извлекаем ID видео из ссылки
+    video_id = None
+    if "/video/" in url:
+        video_id = url.split("/video/")[1].split("?")[0].split("/")[0]
     
-    if FFMPEG_PATH:
-        fmt = "bv*+ba/b"
-    else:
-        fmt = "best"
+    if not video_id:
+        raise Exception("Не удалось извлечь ID видео")
+    
+    # Используем публичное API TikTok
+    api_url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id={video_id}"
+    
+    headers = {
+        "User-Agent": "com.zhiliaoapp.musically/2022600040 (Linux; U; Android 13; en_US; Pixel 7; Build/TQ2A.230505.002; Cronet/113.0.5672.131)",
+    }
+    
+    response = requests.get(api_url, headers=headers)
+    data = response.json()
+    
+    if data.get("status_code") != 0:
+        raise Exception("TikTok API вернул ошибку")
+    
+    aweme_list = data.get("aweme_list", [])
+    if not aweme_list:
+        raise Exception("Видео не найдено")
+    
+    video_data = aweme_list[0]
+    video_url = video_data.get("video", {}).get("play_addr", {}).get("url_list", [None])[0]
+    
+    if not video_url:
+        raise Exception("Не удалось получить ссылку на видео")
+    
+    # Скачиваем видео
+    video_response = requests.get(video_url, headers=headers)
+    filepath = BASE_DIR / f"{uuid.uuid4()}.mp4"
+    
+    with open(filepath, "wb") as f:
+        f.write(video_response.content)
+    
+    info = {
+        "title": video_data.get("desc", "TikTok Video"),
+        "duration": video_data.get("duration", 0),
+    }
+    
+    return filepath, info
+
+def download_video(url: str) -> Tuple[Path, dict]:
+    # Для TikTok используем свой метод
+    if is_tiktok(url):
+        return download_tiktok_video(url)
+    
+    # Для Instagram используем yt-dlp
+    outtmpl = generate_filepath()
     
     ydl_opts = {
         **get_common_ydl_opts(),
         "outtmpl": outtmpl,
-        "format": fmt,
+        "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
-        "cookiefile": get_cookie_file() if is_instagram(url) else None,
+        "cookiefile": get_cookie_file(),
     }
     
-    # Для TikTok пробуем разные User-Agent
-    if is_tiktok(url):
-        ydl_opts["http_headers"] = {
-            "User-Agent": "TikTok 26.2.0 rcx 262018 (iPhone; iOS 14.4.2; en_US) Cronet",
-        }
+    logger.info(f"Downloading Instagram: {url}")
     
-    logger.info(f"Downloading video: {url}")
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-    except Exception as e:
-        # Если с первым User-Agent не вышло, пробуем другой
-        if is_tiktok(url):
-            ydl_opts["http_headers"] = {
-                "User-Agent": "com.ss.android.ugc.trill/260202 (Linux; U; Android 10; en_US; Pixel 4 Build/QQ3A.200805.001)",
-            }
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-        else:
-            raise e
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
     
     files = sorted(
         BASE_DIR.glob(f"{Path(outtmpl).stem}*"),
@@ -115,15 +147,26 @@ def download_video(url: str) -> Tuple[Path, dict]:
     if not files:
         raise FileNotFoundError("Downloaded file not found")
     
-    filepath = files[0]
-    logger.info(f"Downloaded: {filepath} ({filepath.stat().st_size} bytes)")
-    
-    return filepath, info
+    return files[0], info
 
 def download_audio(url: str) -> Tuple[Path, dict]:
     if not FFMPEG_PATH:
         raise RuntimeError("FFmpeg is required for MP3 conversion")
     
+    if is_tiktok(url):
+        # Для TikTok сначала качаем видео, потом извлекаем аудио
+        video_path, info = download_tiktok_video(url)
+        audio_path = video_path.with_suffix(".mp3")
+        
+        import subprocess
+        subprocess.run(
+            [str(FFMPEG_PATH), "-i", str(video_path), "-q:a", "0", "-map", "a", str(audio_path)],
+            check=True, capture_output=True
+        )
+        video_path.unlink()
+        return audio_path, info
+    
+    # Для Instagram
     outtmpl = generate_filepath()
     
     ydl_opts = {
@@ -136,15 +179,8 @@ def download_audio(url: str) -> Tuple[Path, dict]:
             "preferredquality": "192",
         }],
         "ffmpeg_location": str(FFMPEG_PATH),
-        "cookiefile": get_cookie_file() if is_instagram(url) else None,
+        "cookiefile": get_cookie_file(),
     }
-    
-    if is_tiktok(url):
-        ydl_opts["http_headers"] = {
-            "User-Agent": "TikTok 26.2.0 rcx 262018 (iPhone; iOS 14.4.2; en_US) Cronet",
-        }
-    
-    logger.info(f"Downloading audio: {url}")
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
@@ -173,7 +209,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• TikTok\n\n"
         "🎬 Видео — в лучшем качестве со звуком\n"
         "🎵 Аудио — MP3 320kbps\n\n"
-        "📎 Для Instagram отправь cookies.txt мне в лс\n"
         "Работаю 24/7. Даже когда ты спишь.",
         parse_mode="Markdown"
     )
@@ -238,8 +273,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
             
             await query.message.reply_text(
-               "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
-		"💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
+                "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
+		 "💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
             )
         
         elif choice == "audio":
@@ -263,7 +298,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             await query.message.reply_text(
                 "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
-		"💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
+		 "💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
             )
         
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
@@ -278,10 +313,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         if "login" in error_msg.lower() or "empty media" in error_msg.lower():
             await query.edit_message_text("❌ Instagram требует авторизацию. Отправь мне cookies.txt")
-        elif "video unavailable" in error_msg.lower() or "status code" in error_msg.lower():
-            await query.edit_message_text("❌ Видео временно недоступно. Попробуй позже")
-        elif "private" in error_msg.lower():
-            await query.edit_message_text("❌ Приватный аккаунт")
         else:
             await query.edit_message_text("❌ Не удалось скачать. Попробуй другую ссылку")
     except Exception as e:
