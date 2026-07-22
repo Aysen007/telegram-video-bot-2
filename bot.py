@@ -74,11 +74,46 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
     """Скачивание TikTok через API"""
     # Извлекаем ID видео из ссылки
     video_id = None
+    
+    # Пробуем разные форматы ссылок
     if "/video/" in url:
-        video_id = url.split("/video/")[1].split("?")[0].split("/")[0]
+        match = re.search(r'/video/(\d+)', url)
+        if match:
+            video_id = match.group(1)
+    elif "vm.tiktok.com" in url or "vt.tiktok.com" in url:
+        # Для коротких ссылок переходим по редиректу
+        response = requests.head(url, allow_redirects=True, headers={
+            "User-Agent": "com.zhiliaoapp.musically/2022600040"
+        })
+        final_url = response.url
+        match = re.search(r'/video/(\d+)', final_url)
+        if match:
+            video_id = match.group(1)
     
     if not video_id:
-        raise Exception("Не удалось извлечь ID видео")
+        # Если не нашли ID, пробуем yt-dlp как запасной вариант
+        logger.warning(f"Could not extract video ID, trying yt-dlp")
+        outtmpl = generate_filepath()
+        ydl_opts = {
+            **get_common_ydl_opts(),
+            "outtmpl": outtmpl,
+            "format": "best",
+            "merge_output_format": "mp4",
+            "http_headers": {
+                "User-Agent": "com.zhiliaoapp.musically/2022600040",
+            },
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+        
+        files = sorted(
+            BASE_DIR.glob(f"{Path(outtmpl).stem}*"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if files:
+            return files[0], info
+        raise Exception("Не удалось скачать видео")
     
     # Используем публичное API TikTok
     api_url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id={video_id}"
@@ -87,11 +122,11 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
         "User-Agent": "com.zhiliaoapp.musically/2022600040 (Linux; U; Android 13; en_US; Pixel 7; Build/TQ2A.230505.002; Cronet/113.0.5672.131)",
     }
     
-    response = requests.get(api_url, headers=headers)
+    response = requests.get(api_url, headers=headers, timeout=30)
     data = response.json()
     
     if data.get("status_code") != 0:
-        raise Exception("TikTok API вернул ошибку")
+        raise Exception(f"TikTok API error: {data.get('status_msg', 'Unknown error')}")
     
     aweme_list = data.get("aweme_list", [])
     if not aweme_list:
@@ -104,7 +139,7 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
         raise Exception("Не удалось получить ссылку на видео")
     
     # Скачиваем видео
-    video_response = requests.get(video_url, headers=headers)
+    video_response = requests.get(video_url, headers=headers, timeout=60)
     filepath = BASE_DIR / f"{uuid.uuid4()}.mp4"
     
     with open(filepath, "wb") as f:
