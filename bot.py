@@ -215,6 +215,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             with open(filepath, "rb") as f:
                 await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
+            
+            # 👇 ВОТ СЮДА ВСТАВЛЯЕШЬ РЕКЛАМУ
+            await query.message.reply_text(
+                "💡 Больше информации в нашем канале: https://t.me/zvucovideo"
+                "Там ты найдешь гайды по использыванию бота и много чего еще!"
+            )
         
         elif choice == "audio":
             if not FFMPEG_PATH:
@@ -234,6 +240,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             with open(filepath, "rb") as f:
                 await query.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
+            
+            # 👇 И СЮДА ТОЖЕ
+            await query.message.reply_text(
+                "💡 Больше крутых видео в нашем канале: @твой_канал\n"
+                "Там топовые рилсы и тиктоки каждый день!"
+            )
         
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
     
