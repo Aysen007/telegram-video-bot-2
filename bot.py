@@ -7,6 +7,7 @@ import traceback
 import requests
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -14,18 +15,32 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
 
+# Настройка логирования
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    level=logging.INFO,
+    level=logging.DEBUG,  # DEBUG для максимального логирования
 )
 logger = logging.getLogger("MediaBot")
 
-TOKEN: str = os.environ["TOKEN"]
+# Логируем версии
+logger.info(f"Python version: {sys.version}")
+logger.info(f"yt-dlp version: {yt_dlp.version.__version__}")
+
+# === КОНФИГУРАЦИЯ ===
+TOKEN: str = os.environ.get("TOKEN", "")
+if not TOKEN:
+    logger.error("TOKEN environment variable is not set!")
+    raise RuntimeError("TOKEN environment variable is required")
+
+logger.info(f"TOKEN loaded: {TOKEN[:10]}... (length: {len(TOKEN)})")
+
 BASE_DIR: Path = Path("/tmp/media_bot")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
+logger.info(f"BASE_DIR: {BASE_DIR}")
 
 MAX_FILE_SIZE: int = 49 * 1024 * 1024
 
+# === FFMPEG ===
 def find_ffmpeg() -> Optional[Path]:
     path = shutil.which("ffmpeg")
     if path:
@@ -35,7 +50,9 @@ def find_ffmpeg() -> Optional[Path]:
     return None
 
 FFMPEG_PATH: Optional[Path] = find_ffmpeg()
+logger.info(f"FFMPEG_PATH: {FFMPEG_PATH}")
 
+# === YT-DLP ОПЦИИ ===
 def get_common_ydl_opts() -> dict:
     return {
         "quiet": True,
@@ -50,19 +67,25 @@ def get_common_ydl_opts() -> dict:
 
 def get_cookie_file() -> Optional[str]:
     cookie_path = Path("cookies.txt")
-    return str(cookie_path) if cookie_path.exists() else None
+    exists = cookie_path.exists()
+    logger.info(f"cookies.txt exists: {exists}")
+    return str(cookie_path) if exists else None
 
 def generate_filepath() -> str:
     return str(BASE_DIR / f"{uuid.uuid4()}.%(ext)s")
 
 def cleanup() -> None:
     try:
+        count = 0
         for entry in BASE_DIR.iterdir():
             if entry.is_file():
                 entry.unlink()
-    except Exception:
-        pass
+                count += 1
+        logger.info(f"Cleanup removed {count} files")
+    except Exception as e:
+        logger.warning(f"Cleanup error: {e}")
 
+# === URL ПРОВЕРКИ ===
 def is_instagram(url: str) -> bool:
     return "instagram.com" in url.lower()
 
@@ -72,31 +95,18 @@ def is_tiktok(url: str) -> bool:
 def is_supported(url: str) -> bool:
     return is_instagram(url) or is_tiktok(url)
 
+# === FFMPEG КОНВЕРТАЦИЯ ===
 def run_ffmpeg_ensure_playable(input_path: Path, output_path: Path) -> bool:
-    """
-    Конвертирует видео в H.264 + AAC в MP4 контейнере.
-    Это гарантирует воспроизведение в Telegram и других плеерах.
-    Сохраняет оригинальный FPS (не форсирует 60) чтобы избежать лагов.
-    """
     if not FFMPEG_PATH:
         return False
 
     try:
-        # Получаем оригинальный FPS
-        probe_cmd = [
-            str(FFMPEG_PATH),
-            "-i", str(input_path),
-        ]
+        probe_cmd = [str(FFMPEG_PATH), "-i", str(input_path)]
         probe = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=30)
 
-        # Определяем FPS из вывода ffmpeg
         fps_match = re.search(r'(\d+(?:\.\d+)?) fps', probe.stderr)
-        if fps_match:
-            original_fps = fps_match.group(1)
-        else:
-            original_fps = None
+        original_fps = fps_match.group(1) if fps_match else None
 
-        # Базовые параметры для совместимости
         cmd = [
             str(FFMPEG_PATH),
             "-i", str(input_path),
@@ -110,7 +120,6 @@ def run_ffmpeg_ensure_playable(input_path: Path, output_path: Path) -> bool:
             "-y",
         ]
 
-        # Сохраняем оригинальный FPS, если определили
         if original_fps:
             cmd.extend(["-r", original_fps])
 
@@ -119,6 +128,7 @@ def run_ffmpeg_ensure_playable(input_path: Path, output_path: Path) -> bool:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
         if result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0:
+            logger.info(f"FFmpeg conversion successful: {output_path}")
             return True
         else:
             logger.error(f"FFmpeg error: {result.stderr}")
@@ -127,11 +137,8 @@ def run_ffmpeg_ensure_playable(input_path: Path, output_path: Path) -> bool:
         logger.error(f"FFmpeg exception: {e}")
         return False
 
+# === СКАЧИВАНИЕ ===
 def download_tiktok_video(url: str) -> Tuple[Path, dict]:
-    """
-    Скачивание TikTok через yt-dlp.
-    Используем cookies для обхода ограничений.
-    """
     outtmpl = generate_filepath()
 
     ydl_opts = {
@@ -165,28 +172,20 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
 
     filepath = files[0]
 
-    # Конвертируем в совместимый формат (H.264 + AAC)
     if FFMPEG_PATH:
         output_path = BASE_DIR / f"{uuid.uuid4()}.mp4"
         if run_ffmpeg_ensure_playable(filepath, output_path):
             filepath.unlink()
             return output_path, info
-        else:
-            logger.warning("FFmpeg conversion failed, returning original file")
 
     return filepath, info
 
 def download_instagram_video(url: str) -> Tuple[Path, dict]:
-    """
-    Скачивание Instagram через yt-dlp с cookies.
-    yt-dlp может скачать HEVC видео без аудио — проверяем и конвертируем.
-    """
     outtmpl = generate_filepath()
 
     ydl_opts = {
         **get_common_ydl_opts(),
         "outtmpl": outtmpl,
-        # Берём лучший формат с аудио, предпочтительно mp4
         "format": "best[ext=mp4]/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
         "merge_output_format": "mp4",
         "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
@@ -212,27 +211,11 @@ def download_instagram_video(url: str) -> Tuple[Path, dict]:
 
     filepath = files[0]
 
-    # Проверяем, есть ли аудио в файле
-    has_audio = False
-    if FFMPEG_PATH:
-        try:
-            probe = subprocess.run(
-                [str(FFMPEG_PATH), "-i", str(filepath)],
-                capture_output=True, text=True, timeout=30
-            )
-            has_audio = "Audio:" in probe.stderr or "audio" in probe.stderr.lower()
-            logger.info(f"File {filepath.name} has audio: {has_audio}")
-        except Exception as e:
-            logger.warning(f"Could not probe audio: {e}")
-
-    # Конвертируем в H.264 + AAC для гарантированного воспроизведения
     if FFMPEG_PATH:
         output_path = BASE_DIR / f"{uuid.uuid4()}.mp4"
         if run_ffmpeg_ensure_playable(filepath, output_path):
             filepath.unlink()
             return output_path, info
-        else:
-            logger.warning("FFmpeg conversion failed, returning original file")
 
     return filepath, info
 
@@ -248,7 +231,6 @@ def download_audio(url: str) -> Tuple[Path, dict]:
     if not FFMPEG_PATH:
         raise RuntimeError("FFmpeg is required for MP3 conversion")
 
-    # Сначала скачиваем видео
     video_path, info = download_video(url)
     audio_path = video_path.with_suffix(".mp3")
 
@@ -257,9 +239,9 @@ def download_audio(url: str) -> Tuple[Path, dict]:
             [
                 str(FFMPEG_PATH),
                 "-i", str(video_path),
-                "-vn",  # no video
+                "-vn",
                 "-c:a", "libmp3lame",
-                "-q:a", "0",  # highest quality
+                "-q:a", "0",
                 "-y",
                 str(audio_path)
             ],
@@ -271,26 +253,48 @@ def download_audio(url: str) -> Tuple[Path, dict]:
         video_path.unlink()
         raise RuntimeError(f"Audio extraction failed: {e.stderr.decode() if e.stderr else str(e)}")
 
+# === ХРАНИЛИЩЕ ССЫЛОК ===
 user_links: dict[int, str] = {}
 
+# === ОБРАБОТЧИКИ ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "🎥 *Скачаю что угодно, пока ты занят*\n\n"
-        "Кидай ссылку — я сам разберусь.\n"
-        "• Instagram\n"
-        "• TikTok\n\n"
-        "🎬 Видео — в лучшем качестве со звуком\n"
-        "🎵 Аудио — MP3 320kbps\n\n"
-        "Работаю 24/7. Даже когда ты спишь.",
-        parse_mode="MarkdownV2"
-    )
+    logger.info(f"=== /start received from user {update.effective_user.id} ===")
+    try:
+        text = (
+            "🎥 <b>Скачаю что угодно, пока ты занят</b>\n\n"
+            "Кидай ссылку — я сам разберусь.\n"
+            "• Instagram\n"
+            "• TikTok\n\n"
+            "🎬 <b>Видео</b> — в лучшем качестве со звуком\n"
+            "🎵 <b>Аудио</b> — MP3 320kbps\n\n"
+            "Работаю 24/7. Даже когда ты спишь."
+        )
+        logger.info(f"Sending start message with HTML parse_mode")
+        await update.message.reply_text(text, parse_mode="HTML")
+        logger.info("Start message sent successfully")
+    except Exception as e:
+        logger.error(f"Error in start handler: {e}")
+        logger.error(traceback.format_exc())
+        try:
+            # Fallback без parse_mode
+            await update.message.reply_text("Привет! Кидай ссылку на Instagram или TikTok.")
+        except Exception as e2:
+            logger.error(f"Even fallback failed: {e2}")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    file = await update.message.document.get_file()
-    await file.download_to_drive("cookies.txt")
-    await update.message.reply_text("✅ Cookies сохранены! Instagram будет работать!")
+    logger.info(f"Document received from user {update.effective_user.id}")
+    try:
+        file = await update.message.document.get_file()
+        await file.download_to_drive("cookies.txt")
+        await update.message.reply_text("✅ Cookies сохранены! Instagram будет работать!")
+        logger.info("Cookies saved successfully")
+    except Exception as e:
+        logger.error(f"Error handling document: {e}")
+        await update.message.reply_text("❌ Ошибка при сохранении cookies")
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.info(f"Message received from user {update.effective_user.id}: {update.message.text[:50]}...")
+
     text = update.message.text
     user_id = update.effective_user.id
 
@@ -300,12 +304,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     url = urls[0]
+    logger.info(f"Found URL: {url}")
 
     if not is_supported(url):
         await update.message.reply_text("❌ Поддерживаются только Instagram и TikTok")
         return
 
     user_links[user_id] = url
+    logger.info(f"Link stored for user {user_id}")
 
     keyboard = [
         [InlineKeyboardButton("🎬 Видео", callback_data="video")],
@@ -407,15 +413,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     finally:
         cleanup()
 
+# === ГЛАВНЫЙ ЗАПУСК ===
 if __name__ == "__main__":
-    logger.info("Starting bot...")
+    logger.info("=" * 50)
+    logger.info("STARTING BOT")
+    logger.info("=" * 50)
     logger.info(f"FFmpeg: {'found' if FFMPEG_PATH else 'NOT FOUND'}")
+    logger.info(f"Cookies: {get_cookie_file()}")
 
-    app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
-    app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+    try:
+        logger.info("Building application...")
+        app = Application.builder().token(TOKEN).build()
+        logger.info("Application built successfully")
 
-    logger.info("Bot is running.")
-    app.run_polling()
+        logger.info("Registering handlers...")
+        app.add_handler(CommandHandler("start", start))
+        logger.info("- CommandHandler('start') registered")
+
+        app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+        logger.info("- MessageHandler(DOCUMENT) registered")
+
+        app.add_handler(CallbackQueryHandler(button_handler))
+        logger.info("- CallbackQueryHandler registered")
+
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        logger.info("- MessageHandler(TEXT & ~COMMAND) registered")
+
+        logger.info("All handlers registered. Starting polling...")
+        app.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=Update.ALL_TYPES,
+        )
+    except Exception as e:
+        logger.error(f"FATAL ERROR during startup: {e}")
+        logger.error(traceback.format_exc())
+        raise

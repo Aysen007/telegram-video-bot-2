@@ -1,13 +1,6 @@
 {
   "build": {
-    "builder": "NIXPACKS",
-    "nixpacksPlan": {
-      "phases": {
-        "setup": {
-          "nixPkgs": ["ffmpeg", "python311"]
-        }
-      }
-    }
+    "builder": "DOCKERFILE"
   },
   "deploy": {
     "startCommand": "python bot.py"
