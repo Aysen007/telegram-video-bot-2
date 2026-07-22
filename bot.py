@@ -4,6 +4,7 @@ import shutil
 import uuid
 import logging
 import traceback
+import subprocess
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -11,27 +12,18 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import yt_dlp
 
-# --------------------------------------------------------------------------- #
-# Logging
-# --------------------------------------------------------------------------- #
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger("MediaBot")
 
-# --------------------------------------------------------------------------- #
-# Configuration
-# --------------------------------------------------------------------------- #
 TOKEN: str = os.environ["TOKEN"]
 BASE_DIR: Path = Path("/tmp/media_bot")
 BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_FILE_SIZE: int = 49 * 1024 * 1024
 
-# --------------------------------------------------------------------------- #
-# FFmpeg detection
-# --------------------------------------------------------------------------- #
 def find_ffmpeg() -> Optional[Path]:
     path = shutil.which("ffmpeg")
     if path:
@@ -42,9 +34,6 @@ def find_ffmpeg() -> Optional[Path]:
 
 FFMPEG_PATH: Optional[Path] = find_ffmpeg()
 
-# --------------------------------------------------------------------------- #
-# Helpers
-# --------------------------------------------------------------------------- #
 def get_common_ydl_opts() -> dict:
     return {
         "quiet": True,
@@ -55,7 +44,6 @@ def get_common_ydl_opts() -> dict:
         "fragment_retries": 15,
         "socket_timeout": 60,
         "extractor_retries": 10,
-        "concurrent_fragment_downloads": 8,
         "http_headers": {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         },
@@ -85,16 +73,40 @@ def is_tiktok(url: str) -> bool:
 def is_supported(url: str) -> bool:
     return is_instagram(url) or is_tiktok(url)
 
-# --------------------------------------------------------------------------- #
-# Download functions
-# --------------------------------------------------------------------------- #
+def convert_to_h264(input_path: Path) -> Path:
+    """Конвертирует видео в H.264 для совместимости с Telegram"""
+    if not FFMPEG_PATH:
+        return input_path
+    
+    output_path = input_path.with_stem(input_path.stem + "_converted").with_suffix(".mp4")
+    
+    cmd = [
+        str(FFMPEG_PATH),
+        "-i", str(input_path),
+        "-c:v", "libx264",
+        "-preset", "fast",
+        "-crf", "23",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        "-pix_fmt", "yuv420p",
+        "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-y",
+        str(output_path)
+    ]
+    
+    subprocess.run(cmd, check=True, capture_output=True)
+    input_path.unlink()
+    
+    return output_path
+
 def download_video(url: str) -> Tuple[Path, dict]:
     outtmpl = generate_filepath()
     
     ydl_opts = {
         **get_common_ydl_opts(),
         "outtmpl": outtmpl,
-        "format": "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/bv*+ba/best",
+        "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
         "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
         "cookiefile": get_cookie_file() if is_instagram(url) else None,
@@ -116,15 +128,12 @@ def download_video(url: str) -> Tuple[Path, dict]:
     filepath = files[0]
     logger.info(f"Downloaded: {filepath} ({filepath.stat().st_size} bytes)")
     
-    if FFMPEG_PATH and filepath.suffix != ".mp4":
-        import subprocess
-        new_path = filepath.with_suffix(".mp4")
-        subprocess.run(
-            [str(FFMPEG_PATH), "-i", str(filepath), "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", str(new_path)],
-            check=True, capture_output=True
-        )
-        filepath.unlink()
-        filepath = new_path
+    # Всегда конвертируем для Instagram
+    if is_instagram(url) and FFMPEG_PATH:
+        filepath = convert_to_h264(filepath)
+    # Для TikTok тоже конвертируем если не mp4
+    elif FFMPEG_PATH and filepath.suffix != ".mp4":
+        filepath = convert_to_h264(filepath)
     
     return filepath, info
 
@@ -164,9 +173,6 @@ def download_audio(url: str) -> Tuple[Path, dict]:
     
     return files[0], info
 
-# --------------------------------------------------------------------------- #
-# Telegram handlers
-# --------------------------------------------------------------------------- #
 user_links: dict[int, str] = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -231,11 +237,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if choice == "video":
             await query.edit_message_text("⏳ Скачиваю видео...")
             filepath, info = download_video(url)
-            await query.edit_message_text("📤 Отправляю...")
             
             size = filepath.stat().st_size
             if size > MAX_FILE_SIZE:
                 raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
+            
+            await query.edit_message_text("📤 Отправляю...")
             
             with open(filepath, "rb") as f:
                 await query.message.reply_video(video=f, caption="✅ Готово!", supports_streaming=True)
@@ -249,11 +256,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             filepath, info = download_audio(url)
             title = info.get("title", "Audio")
             duration = int(info.get("duration", 0))
-            await query.edit_message_text("📤 Отправляю...")
             
             size = filepath.stat().st_size
             if size > MAX_FILE_SIZE:
                 raise ValueError(f"Файл слишком большой ({size / 1024 / 1024:.1f} MB)")
+            
+            await query.edit_message_text("📤 Отправляю...")
             
             with open(filepath, "rb") as f:
                 await query.message.reply_audio(audio=f, title=title, duration=duration, caption=f"🎵 {title}")
@@ -284,9 +292,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     finally:
         cleanup()
 
-# --------------------------------------------------------------------------- #
-# Entry point
-# --------------------------------------------------------------------------- #
 if __name__ == "__main__":
     logger.info("Starting bot...")
     logger.info(f"FFmpeg: {'found' if FFMPEG_PATH else 'NOT FOUND'}")
