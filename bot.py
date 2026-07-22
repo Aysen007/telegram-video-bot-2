@@ -39,11 +39,17 @@ def get_common_ydl_opts() -> dict:
         "no_warnings": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
-        "retries": 10,
-        "fragment_retries": 10,
-        "socket_timeout": 30,
+        "retries": 20,
+        "fragment_retries": 20,
+        "socket_timeout": 60,
+        "extractor_retries": 15,
+        "concurrent_fragment_downloads": 16,
+        "buffersize": 1024,
+        "http_chunk_size": 10485760,
         "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": "com.zhiliaoapp.musically/2022600040 (Linux; U; Android 13; en_US; Pixel 7; Build/TQ2A.230505.002; Cronet/113.0.5672.131)",
+            "Accept": "*/*",
+            "Accept-Encoding": "identity",
         },
     }
 
@@ -86,6 +92,16 @@ def download_video(url: str) -> Tuple[Path, dict]:
         "merge_output_format": "mp4",
         "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
         "cookiefile": get_cookie_file() if is_instagram(url) else None,
+        # Для TikTok добавляем спецнастройки
+        "extractor_args": {
+            "tiktok": {
+                "api_hostname": "api16-normal-c-useast1a.tiktokv.com",
+                "app_name": "trill",
+                "app_version": "34.1.2",
+                "manifest_app_version": "34.1.2",
+            }
+        },
+        "format_sort": ["vcodec:h264", "res", "br"],
     }
     
     logger.info(f"Downloading video: {url}")
@@ -152,7 +168,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "• TikTok\n\n"
         "🎬 Видео — в лучшем качестве со звуком\n"
         "🎵 Аудио — MP3 320kbps\n\n"
-        "📎 Для Instagram отправь cookies.txt мне в лс\n"
         "Работаю 24/7. Даже когда ты спишь.",
         parse_mode="Markdown"
     )
@@ -218,8 +233,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             # 👇 ВОТ СЮДА ВСТАВЛЯЕШЬ РЕКЛАМУ
             await query.message.reply_text(
-                "💡 Больше информации в нашем канале: https://t.me/zvucovideo"
-		 "💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
+                "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
+		"💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
             )
         
         elif choice == "audio":
@@ -243,8 +258,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             
             # 👇 И СЮДА ТОЖЕ
             await query.message.reply_text(
-                "💡 Больше крутых видео в нашем канале: @твой_канал\n"
-                "Там топовые рилсы и тиктоки каждый день!"
+                "💡 Больше информации в нашем канале: https://t.me/zvucovideo\n"
+		"💡 Там ты найдёшь гайды по использованию бота и много чего ещё!"
             )
         
         await query.edit_message_text("✅ Готово! Отправь новую ссылку.")
