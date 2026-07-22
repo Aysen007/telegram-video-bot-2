@@ -71,8 +71,7 @@ def is_supported(url: str) -> bool:
     return is_instagram(url) or is_tiktok(url)
 
 def download_tiktok_video(url: str) -> Tuple[Path, dict]:
-    """Скачивание TikTok через API с запасным вариантом"""
-    # Извлекаем ID видео
+    """Скачивание TikTok со звуком, качеством и плавностью"""
     video_id = None
     
     if "/video/" in url:
@@ -91,7 +90,6 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
         except:
             pass
     
-    # Если нашли ID — пробуем API
     if video_id:
         try:
             api_url = f"https://api16-normal-c-useast1a.tiktokv.com/aweme/v1/feed/?aweme_id={video_id}"
@@ -108,34 +106,110 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
                     aweme_list = data.get("aweme_list", [])
                     if aweme_list:
                         video_data = aweme_list[0]
-                        video_url = video_data.get("video", {}).get("play_addr", {}).get("url_list", [None])[0]
                         
-                        if video_url:
-                            video_response = requests.get(video_url, headers=headers, timeout=60)
-                            filepath = BASE_DIR / f"{uuid.uuid4()}.mp4"
-                            
-                            with open(filepath, "wb") as f:
-                                f.write(video_response.content)
-                            
+                        # Ищем видео в наилучшем качестве
+                        video_url = None
+                        bit_rate_list = video_data.get("video", {}).get("bit_rate", [])
+                        if bit_rate_list:
+                            # Берём видео с самым высоким битрейтом
+                            best_video = max(bit_rate_list, key=lambda x: x.get("bit_rate", 0))
+                            video_url = best_video.get("play_addr", {}).get("url_list", [None])[0]
+                        
+                        if not video_url:
+                            video_url = video_data.get("video", {}).get("play_addr", {}).get("url_list", [None])[0]
+                        
+                        if not video_url:
+                            raise Exception("Не удалось получить видео")
+                        
+                        # Скачиваем видео
+                        video_path = BASE_DIR / f"{uuid.uuid4()}_video.mp4"
+                        video_response = requests.get(video_url, headers=headers, timeout=60)
+                        with open(video_path, "wb") as f:
+                            f.write(video_response.content)
+                        
+                        if not FFMPEG_PATH:
                             info = {
                                 "title": video_data.get("desc", "TikTok Video"),
                                 "duration": video_data.get("duration", 0),
                             }
+                            return video_path, info
+                        
+                        # Ищем аудио
+                        audio_url = None
+                        if bit_rate_list:
+                            best_video = max(bit_rate_list, key=lambda x: x.get("bit_rate", 0))
+                            audio_url = best_video.get("play_addr", {}).get("url_list", [None])[0]
+                        
+                        if not audio_url:
+                            audio_url = video_data.get("video", {}).get("play_addr_bytevc1", {}).get("url_list", [None])[0]
+                        
+                        if audio_url:
+                            # Скачиваем аудио
+                            audio_path = BASE_DIR / f"{uuid.uuid4()}_audio.mp4"
+                            audio_response = requests.get(audio_url, headers=headers, timeout=60)
+                            with open(audio_path, "wb") as f:
+                                f.write(audio_response.content)
                             
-                            return filepath, info
-        except:
-            logger.warning("TikTok API failed, trying yt-dlp")
+                            # Объединяем с улучшением качества
+                            output_path = BASE_DIR / f"{uuid.uuid4()}.mp4"
+                            import subprocess
+                            subprocess.run([
+                                str(FFMPEG_PATH),
+                                "-i", str(video_path),
+                                "-i", str(audio_path),
+                                "-c:v", "libx264",
+                                "-preset", "fast",
+                                "-crf", "18",
+                                "-r", "60",
+                                "-c:a", "aac",
+                                "-b:a", "192k",
+                                "-movflags", "+faststart",
+                                "-pix_fmt", "yuv420p",
+                                "-shortest",
+                                "-y",
+                                str(output_path)
+                            ], check=True, capture_output=True)
+                            
+                            video_path.unlink()
+                            audio_path.unlink()
+                            video_path = output_path
+                        else:
+                            # Только видео — улучшаем качество
+                            output_path = BASE_DIR / f"{uuid.uuid4()}.mp4"
+                            import subprocess
+                            subprocess.run([
+                                str(FFMPEG_PATH),
+                                "-i", str(video_path),
+                                "-c:v", "libx264",
+                                "-preset", "fast",
+                                "-crf", "18",
+                                "-r", "60",
+                                "-movflags", "+faststart",
+                                "-pix_fmt", "yuv420p",
+                                "-y",
+                                str(output_path)
+                            ], check=True, capture_output=True)
+                            
+                            video_path.unlink()
+                            video_path = output_path
+                        
+                        info = {
+                            "title": video_data.get("desc", "TikTok Video"),
+                            "duration": video_data.get("duration", 0),
+                        }
+                        
+                        return video_path, info
+        except Exception as e:
+            logger.warning(f"TikTok API failed: {e}, trying yt-dlp")
     
     # Запасной вариант — yt-dlp
     outtmpl = generate_filepath()
     ydl_opts = {
         **get_common_ydl_opts(),
         "outtmpl": outtmpl,
-        "format": "best",
+        "format": "bestvideo+bestaudio/best",
         "merge_output_format": "mp4",
-        "http_headers": {
-            "User-Agent": "com.zhiliaoapp.musically/2022600040",
-        },
+        "ffmpeg_location": str(FFMPEG_PATH) if FFMPEG_PATH else None,
     }
     
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -148,6 +222,28 @@ def download_tiktok_video(url: str) -> Tuple[Path, dict]:
     )
     if not files:
         raise FileNotFoundError("Downloaded file not found")
+    
+    # Конвертируем для плавности
+    if FFMPEG_PATH:
+        filepath = files[0]
+        output_path = BASE_DIR / f"{uuid.uuid4()}.mp4"
+        import subprocess
+        subprocess.run([
+            str(FFMPEG_PATH),
+            "-i", str(filepath),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "18",
+            "-r", "60",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-movflags", "+faststart",
+            "-pix_fmt", "yuv420p",
+            "-y",
+            str(output_path)
+        ], check=True, capture_output=True)
+        filepath.unlink()
+        return output_path, info
     
     return files[0], info
 
